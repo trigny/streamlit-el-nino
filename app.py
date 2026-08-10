@@ -23,6 +23,27 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+def setup_cds_credentials():
+    """
+    Makes CDS API credentials available on Streamlit Cloud.
+    Locally, your normal C:/Users/thoma/.cdsapirc can still be used.
+    """
+
+    cds_url = st.secrets.get("CDSAPI_URL", None)
+    cds_key = st.secrets.get("CDSAPI_KEY", None)
+
+    if cds_url and cds_key:
+        os.environ["CDSAPI_URL"] = cds_url
+        os.environ["CDSAPI_KEY"] = cds_key
+
+        cdsapirc_path = Path.home() / ".cdsapirc"
+        cdsapirc_path.write_text(
+            f"url: {cds_url}\nkey: {cds_key}\n",
+            encoding="utf-8"
+        )
+
+setup_cds_credentials()
+
 from climate_pipeline import (
     DEFAULT_DATA_DIR_NAME,
     WORKFLOW_HASH,
