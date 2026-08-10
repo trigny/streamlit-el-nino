@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+xarray
+matplotlib
+cdsapi
+netCDF4
+h5netcdf
+cfgrib
+shapely
+cartopy
+urllib3
