@@ -21,11 +21,11 @@ from matplotlib.collections import PolyCollection
 
 
 def show_dataframe(obj: Any) -> None:
-    """Show pandas DataFrames and Styler objects cleanly in Streamlit."""
+    "Show pandas DataFrames and Styler objects cleanly in Streamlit."
     if isinstance(obj, pd.io.formats.style.Styler):
-        st.dataframe(obj.data, use_container_width=True)
+        st.dataframe(obj.data, width="stretch")
     elif isinstance(obj, pd.DataFrame):
-        st.dataframe(obj, use_container_width=True)
+        st.dataframe(obj, width="stretch")
     else:
         st.write(obj)
 
