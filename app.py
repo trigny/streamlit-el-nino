@@ -283,7 +283,7 @@ def render_numbered_figure(
     fig = fix_forecast_marker_and_legend(figures[index], figure_number)
     render_limited_width_matplotlib_figure(fig)
     st.caption(f"Showing Figure {figure_number} from the captured workflow output.")
-
+    
 def render_region_tab(
     namespace: dict[str, Any],
     figures: list[Any],
@@ -292,6 +292,21 @@ def render_region_tab(
     final_figure: int | None = None,
 ) -> None:
     render_region_table(namespace, region_name)
+
+    if region_name.lower() == "peru":
+        render_optional_dataframe(
+            namespace,
+            "peru_polygon_forecast_table",
+            "Peru polygon forecast table",
+            "peru_polygon_forecast_table.csv",
+        )
+
+        render_optional_dataframe(
+            namespace,
+            "peru_polygon_summary",
+            "Peru polygon final-3-month summary",
+            "peru_polygon_summary.csv",
+        )
 
     matched_figures = find_region_figures(figures, region_name)
 
@@ -303,30 +318,34 @@ def render_region_tab(
     if final_figure is not None:
         figures_to_show = figures_to_show + [final_figure]
 
-    # Keep the old requested numbers only if they actually exist.
+    # Keep only figure numbers that actually exist.
     figures_to_show = [
         n for n in figures_to_show
         if 1 <= n <= len(figures)
     ]
 
-    # Special Peru logic: explicitly include the Peru polygon figures
-    # even if their captured figure numbers changed after deployment.
+    # Extra Peru logic: include polygon/subregion figures even if the numbering changed.
     if region_name.lower() == "peru":
-        peru_polygon_figures = []
+        peru_polygon_figures: list[int] = []
 
         peru_polygon_figures += find_figures_by_terms(
             figures,
-            ["peru", "polygon", "forecast"]
+            ["peru", "polygon"],
         )
 
         peru_polygon_figures += find_figures_by_terms(
             figures,
-            ["peru", "polygon", "comparison"]
+            ["peru", "subregion"],
         )
 
         peru_polygon_figures += find_figures_by_terms(
             figures,
-            ["peru", "subregion"]
+            ["polygon", "forecast"],
+        )
+
+        peru_polygon_figures += find_figures_by_terms(
+            figures,
+            ["polygon", "comparison"],
         )
 
         for n in peru_polygon_figures:
@@ -341,33 +360,55 @@ def render_region_tab(
         st.markdown("---")
         render_numbered_figure(figures, figure_number)
 
-
 def render_overview_tab(namespace: dict[str, Any], figures: list[Any]) -> None:
     st.subheader("Overview")
+
     st.markdown(
         """
-        This dashboard combines historical ERA5 observations with ECMWF SEAS5 seasonal forecasts to summarize expected temperature and precipitation anomalies across the four regions. The workflow builds a historical Niño3.4-based El Niño context, then compares the current forecast months against historical anomaly patterns and region-specific forecast tables.
+        This dashboard combines historical ERA5 observations with ECMWF SEAS5 seasonal forecasts
+        to summarize expected temperature and precipitation anomalies across the study regions.
+
+        The workflow builds a historical Niño3.4-based El Niño context, then compares the current
+        forecast months against historical anomaly patterns and region-specific forecast tables.
         """
     )
 
     st.markdown("---")
     st.markdown("### Final forecast-month summary")
+
     summary = get_dataframe(namespace, "forecast_last3_summary")
+
     if summary is not None and not summary.empty:
         show_dataframe(summary)
-        render_download_button_for_dataframe(summary, "forecast_last3_summary.csv", "Download final forecast-month summary CSV")
+        render_download_button_for_dataframe(
+            summary,
+            "forecast_last3_summary.csv",
+            "Download final forecast-month summary CSV",
+        )
     else:
         st.info("No forecast_last3_summary DataFrame was found in the pipeline output.")
 
     st.markdown("---")
     render_numbered_figure(figures, 1)
 
-    st.markdown("---")
-    st.markdown("### Captured workflow figures")
-    st.caption(
-        f"The pipeline captured {len(figures)} figure(s). "
-        "Only available figures are displayed, so missing legacy figure numbers are skipped."
-    )
+    # Show the last two captured workflow figures in the Overview.
+    # These replace the old hardcoded Figure 17 and Figure 18 slots.
+    if len(figures) >= 2:
+        overview_bottom_figures = [
+            (len(figures) - 1, "Figure 17"),
+            (len(figures), "Figure 18"),
+        ]
+
+        for figure_number, display_title in overview_bottom_figures:
+            st.markdown("---")
+            render_numbered_figure(
+                figures,
+                figure_number,
+                title=display_title,
+                show_missing_message=True,
+            )
+    else:
+        st.info("The pipeline did not capture enough figures to show the two overview summary figures.")
 
 def render_optional_dataframe(
     namespace: dict[str, Any],
@@ -391,10 +432,6 @@ def render_optional_dataframe(
 
 
 def figure_text_contains(fig: Any, required_terms: list[str]) -> bool:
-    """
-    Return True if all required terms appear somewhere in the figure titles,
-    suptitle, axis labels, or legend labels.
-    """
     texts: list[str] = []
 
     suptitle = getattr(fig, "_suptitle", None)
@@ -419,6 +456,20 @@ def figure_text_contains(fig: Any, required_terms: list[str]) -> bool:
 
     joined = " ".join(texts).lower()
     return all(term.lower() in joined for term in required_terms)
+
+
+def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
+    matches: list[int] = []
+
+    for i, fig in enumerate(figures, start=1):
+        try:
+            if figure_text_contains(fig, required_terms):
+                matches.append(i)
+        except Exception:
+            pass
+
+    return matches
+    
 
 
 def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
