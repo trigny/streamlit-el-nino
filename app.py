@@ -259,33 +259,83 @@ def render_region_table(namespace: dict[str, Any], region_name: str) -> None:
         st.info(f"No forecast table was found for {region_name}.")
 
 
-def render_numbered_figure(figures: list[Any], figure_number: int, title: str | None = None) -> None:
+def render_numbered_figure(
+    figures: list[Any],
+    figure_number: int,
+    title: str | None = None,
+    show_missing_message: bool = False,
+) -> None:
+    index = figure_number - 1
+
+    if not (0 <= index < len(figures)):
+        if show_missing_message:
+            label = title if title else f"Figure {figure_number}"
+            st.markdown(f"### {label}")
+            st.info(
+                f"Figure {figure_number} was not captured. "
+                f"The pipeline captured {len(figures)} figure(s)."
+            )
+        return
+
     label = title if title else f"Figure {figure_number}"
     st.markdown(f"### {label}")
-
-    index = figure_number - 1
-    if not (0 <= index < len(figures)):
-        st.info(f"Figure {figure_number} was not captured. The pipeline captured {len(figures)} figure(s).")
-        return
 
     fig = fix_forecast_marker_and_legend(figures[index], figure_number)
     render_limited_width_matplotlib_figure(fig)
     st.caption(f"Showing Figure {figure_number} from the captured workflow output.")
 
-
-def render_region_tab(namespace: dict[str, Any], figures: list[Any], region_name: str, figure_numbers: list[int] | None = None, final_figure: int | None = None) -> None:
+def render_region_tab(
+    namespace: dict[str, Any],
+    figures: list[Any],
+    region_name: str,
+    figure_numbers: list[int] | None = None,
+    final_figure: int | None = None,
+) -> None:
     render_region_table(namespace, region_name)
 
     matched_figures = find_region_figures(figures, region_name)
 
-    # Prefer title-based matching so figure tabs remain correct even if one
-    # optional figure is skipped or added by the workflow.
     if matched_figures:
         figures_to_show = matched_figures
     else:
         figures_to_show = figure_numbers or []
-        if final_figure is not None:
-            figures_to_show = figures_to_show + [final_figure]
+
+    if final_figure is not None:
+        figures_to_show = figures_to_show + [final_figure]
+
+    # Keep the old requested numbers only if they actually exist.
+    figures_to_show = [
+        n for n in figures_to_show
+        if 1 <= n <= len(figures)
+    ]
+
+    # Special Peru logic: explicitly include the Peru polygon figures
+    # even if their captured figure numbers changed after deployment.
+    if region_name.lower() == "peru":
+        peru_polygon_figures = []
+
+        peru_polygon_figures += find_figures_by_terms(
+            figures,
+            ["peru", "polygon", "forecast"]
+        )
+
+        peru_polygon_figures += find_figures_by_terms(
+            figures,
+            ["peru", "polygon", "comparison"]
+        )
+
+        peru_polygon_figures += find_figures_by_terms(
+            figures,
+            ["peru", "subregion"]
+        )
+
+        for n in peru_polygon_figures:
+            if n not in figures_to_show and 1 <= n <= len(figures):
+                figures_to_show.append(n)
+
+    if not figures_to_show:
+        st.info(f"No captured figures were found for {region_name}.")
+        return
 
     for figure_number in figures_to_show:
         st.markdown("---")
@@ -311,10 +361,77 @@ def render_overview_tab(namespace: dict[str, Any], figures: list[Any]) -> None:
 
     st.markdown("---")
     render_numbered_figure(figures, 1)
+
     st.markdown("---")
-    render_numbered_figure(figures, 17)
+    st.markdown("### Captured workflow figures")
+    st.caption(
+        f"The pipeline captured {len(figures)} figure(s). "
+        "Only available figures are displayed, so missing legacy figure numbers are skipped."
+    )
+
+def render_optional_dataframe(
+    namespace: dict[str, Any],
+    dataframe_name: str,
+    title: str,
+    filename: str,
+) -> None:
+    df = get_dataframe(namespace, dataframe_name)
+
+    if df is None or df.empty:
+        return
+
     st.markdown("---")
-    render_numbered_figure(figures, 18)
+    st.markdown(f"### {title}")
+    show_dataframe(df)
+    render_download_button_for_dataframe(
+        df,
+        filename,
+        f"Download {title} CSV",
+    )
+
+
+def figure_text_contains(fig: Any, required_terms: list[str]) -> bool:
+    """
+    Return True if all required terms appear somewhere in the figure titles,
+    suptitle, axis labels, or legend labels.
+    """
+    texts: list[str] = []
+
+    suptitle = getattr(fig, "_suptitle", None)
+    if suptitle is not None:
+        try:
+            texts.append(str(suptitle.get_text()))
+        except Exception:
+            pass
+
+    for ax in getattr(fig, "axes", []):
+        for getter in [ax.get_title, ax.get_xlabel, ax.get_ylabel]:
+            try:
+                texts.append(str(getter()))
+            except Exception:
+                pass
+
+        try:
+            handles, labels = ax.get_legend_handles_labels()
+            texts.extend([str(label) for label in labels])
+        except Exception:
+            pass
+
+    joined = " ".join(texts).lower()
+    return all(term.lower() in joined for term in required_terms)
+
+
+def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
+    matches: list[int] = []
+
+    for i, fig in enumerate(figures, start=1):
+        try:
+            if figure_text_contains(fig, required_terms):
+                matches.append(i)
+        except Exception:
+            pass
+
+    return matches   
 
 
 def main() -> None:
