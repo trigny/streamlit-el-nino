@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 DEFAULT_DATA_DIR_NAME = "data_download"
-WORKFLOW_HASH = "daac1fb1d2c5_clean_deploy_v2"
+WORKFLOW_HASH = "daac1fb1d2c5_clean_deploy_v3"
 LEGACY_WORKFLOW_FILE = Path(__file__).resolve().with_name("legacy_workflow.py")
 
 def load_legacy_workflow_source() -> str:
