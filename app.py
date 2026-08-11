@@ -7,16 +7,16 @@ Tabs:
 - Madagascar
 - Thailand
 - Kenya
+- Switzerland
 
 Run with:
-    python -m streamlit run app.py
+python -m streamlit run app.py
 """
 
 from __future__ import annotations
 
 import base64
 import io
-
 from pathlib import Path
 from typing import Any
 
@@ -45,19 +45,26 @@ except Exception:
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / DEFAULT_DATA_DIR_NAME
 
-
 MAX_FIGURE_WIDTH_PX = 1100
 FIGURE_RENDER_DPI = 145
 
-def render_limited_width_matplotlib_figure(fig: Any, max_width_px: int = MAX_FIGURE_WIDTH_PX) -> None:
-    """Render a matplotlib figure with a maximum display width.
 
-    Streamlit's normal st.pyplot output expands with the page width, which makes
-    figures too large on full-screen or large external monitors. Rendering the
-    figure as an inline PNG inside a max-width HTML container keeps the figure
-    readable and centered.
+# =====================================================================
+# General rendering helpers
+# =====================================================================
+
+def render_limited_width_matplotlib_figure(
+    fig: Any,
+    max_width_px: int = MAX_FIGURE_WIDTH_PX,
+) -> None:
     """
+    Render a matplotlib figure with a maximum display width.
 
+    Streamlit's normal st.pyplot output expands with the page width, which can
+    make figures too large on full-screen or large external monitors. Rendering
+    the figure as an inline PNG inside a max-width HTML container keeps the
+    figure readable and centered.
+    """
     buffer = io.BytesIO()
     fig.savefig(
         buffer,
@@ -70,79 +77,87 @@ def render_limited_width_matplotlib_figure(fig: Any, max_width_px: int = MAX_FIG
     encoded = base64.b64encode(buffer.read()).decode("utf-8")
 
     html = f"""
-    <div style="max-width:{max_width_px}px; margin-left:auto; margin-right:auto;">
+    <div style="width:100%; display:flex; justify-content:center; margin-top:0.5rem; margin-bottom:0.5rem;">
         <img src="data:image/png;base64,{encoded}"
-             style="width:100%; height:auto; display:block;" />
+             style="max-width:{max_width_px}px; width:100%; height:auto; display:block;" />
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
 
-st.set_page_config(
-    page_title="El Nino climate dashboard",
-    page_icon="🌦️",
-    layout="wide",
-)
 
-st.markdown(
-    """
-    <style>
-    .block-container {
-        padding-top: 1.15rem !important;
-    }
-    h1 {
-        font-size: 2.10rem !important;
-        line-height: 1.15 !important;
-        margin-bottom: 0.15rem !important;
-    }
-    div[data-testid="stCaptionContainer"] {
-        margin-bottom: 0.25rem !important;
-    }
-    .compact-metric {
-        border: 1px solid #e6e8ef;
-        border-radius: 0.55rem;
-        background-color: white;
-        padding: 0.42rem 0.58rem 0.48rem 0.58rem;
-        min-height: 3.85rem;
-    }
-    .compact-metric-label {
-        color: #5f6368;
-        font-size: 0.70rem;
-        line-height: 1.05;
-        margin-bottom: 0.25rem;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .compact-metric-value {
-        color: #31333f;
-        font-size: 1.02rem;
-        font-weight: 650;
-        line-height: 1.12;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+def get_figure_title(fig: Any, fallback: str = "Workflow figure") -> str:
+    """Return a readable title from a matplotlib figure."""
+    suptitle = getattr(fig, "_suptitle", None)
+    if suptitle is not None:
+        try:
+            text = str(suptitle.get_text()).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+    for ax in getattr(fig, "axes", []):
+        try:
+            text = str(ax.get_title()).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+    return fallback
 
 
-@st.cache_resource(show_spinner=False)
-def cached_pipeline_run(workflow_hash: str, force_refresh: bool):
-    return run_pipeline(
-        data_dir=DATA_DIR,
-        force_refresh=force_refresh,
+def compact_metric(label: str, value: Any) -> None:
+    value_text = "NA" if value is None else str(value)
+    st.markdown(
+        f"""
+        <div style="padding:0.7rem 0.8rem; border:1px solid #e6e8eb; border-radius:0.5rem; background:#ffffff; min-height:5.1rem;">
+            <div style="font-size:0.78rem; color:#6b7280; margin-bottom:0.35rem;">{label}</div>
+            <div style="font-size:1.0rem; font-weight:650; color:#111827; line-height:1.25;">{value_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
+
+def render_workflow_figure(
+    figures: list[Any],
+    figure_number: int,
+    title: str | None = None,
+    missing_message: str | None = None,
+) -> None:
+    """
+    Render one captured workflow figure without exposing legacy figure numbers
+    in the UI.
+    """
+    index = figure_number - 1
+
+    if not (0 <= index < len(figures)):
+        if missing_message:
+            st.info(missing_message)
+        return
+
+    fig = fix_forecast_marker_and_legend(figures[index], figure_number)
+    heading = title or get_figure_title(fig)
+    st.markdown(f"### {heading}")
+    render_limited_width_matplotlib_figure(fig)
+    st.caption("Captured workflow output.")
+
+
+# =====================================================================
+# Pipeline metadata helpers
+# =====================================================================
 
 def get_forecast_label(namespace: dict[str, Any]) -> str:
     if namespace.get("FORECAST_LABEL"):
         return str(namespace["FORECAST_LABEL"])
+
     configs = namespace.get("FORECAST_CONFIGS", {})
     primary = namespace.get("PRIMARY_FORECAST_SOURCE")
+
     if isinstance(configs, dict) and primary in configs:
         return str(configs[primary].get("label", primary))
+
     return "NA"
 
 
@@ -163,12 +178,14 @@ def infer_historical_start(namespace: dict[str, Any]) -> str:
                 return pd.Timestamp(obj.index.min()).strftime("%Y-%m")
         except Exception:
             continue
+
     return "NA"
 
 
 def format_range(start_value: Any, end_value: Any) -> str:
     start = format_month(start_value)
     end = format_month(end_value)
+
     if start == "NA" and end == "NA":
         return "NA"
     if start == "NA":
@@ -178,43 +195,12 @@ def format_range(start_value: Any, end_value: Any) -> str:
     return f"{start} to {end}"
 
 
-def compact_metric(label: str, value: Any) -> None:
-    value_text = "NA" if value is None else str(value)
-    st.markdown(
-        f"""
-        <div class="compact-metric">
-            <div class="compact-metric-label">{label}</div>
-            <div class="compact-metric-value" title="{value_text}">{value_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+# =====================================================================
+# Figure matching helpers
+# =====================================================================
 
-
-def find_region_table(namespace: dict[str, Any], region_name: str) -> pd.DataFrame | None:
-    forecast_tables = namespace.get("forecast_tables")
-
-    if isinstance(forecast_tables, dict):
-        if region_name in forecast_tables and isinstance(forecast_tables[region_name], pd.DataFrame):
-            return forecast_tables[region_name].copy()
-        for key, value in forecast_tables.items():
-            if str(key).strip().lower() == region_name.strip().lower() and isinstance(value, pd.DataFrame):
-                return value.copy()
-
-    combined = get_dataframe(namespace, "combined_forecast_table")
-    if combined is not None:
-        for col in ["Region", "Country"]:
-            if col in combined.columns:
-                out = combined[combined[col].astype(str).str.lower().eq(region_name.lower())].copy()
-                if not out.empty:
-                    return out
-    return None
-
-
-
-def figure_matches_region(fig: Any, region_name: str) -> bool:
-    """Return True if a captured matplotlib figure appears to belong to a region."""
-    needle = region_name.lower()
+def figure_text_contains(fig: Any, required_terms: list[str]) -> bool:
+    """Return True if all required terms are present in figure text."""
     texts: list[str] = []
 
     suptitle = getattr(fig, "_suptitle", None)
@@ -231,23 +217,89 @@ def figure_matches_region(fig: Any, region_name: str) -> bool:
             except Exception:
                 pass
 
-    return any(needle in text.lower() for text in texts if text)
+        try:
+            _, labels = ax.get_legend_handles_labels()
+            texts.extend([str(label) for label in labels])
+        except Exception:
+            pass
+
+    joined = " ".join(texts).lower()
+    return all(term.lower() in joined for term in required_terms)
+
+
+def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
+    matches: list[int] = []
+
+    for i, fig in enumerate(figures, start=1):
+        try:
+            if figure_text_contains(fig, required_terms):
+                matches.append(i)
+        except Exception:
+            pass
+
+    return matches
+
+
+def figure_matches_region(fig: Any, region_name: str) -> bool:
+    return figure_text_contains(fig, [region_name])
 
 
 def find_region_figures(figures: list[Any], region_name: str) -> list[int]:
-    """Find captured figure numbers whose titles/axis labels contain region_name."""
     matches: list[int] = []
+
     for i, fig in enumerate(figures, start=1):
         try:
             if figure_matches_region(fig, region_name):
                 matches.append(i)
         except Exception:
             pass
+
     return matches
+
+
+def unique_existing_figure_numbers(numbers: list[int], figures: list[Any]) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+
+    for n in numbers:
+        if 1 <= n <= len(figures) and n not in seen:
+            out.append(n)
+            seen.add(n)
+
+    return out
+
+
+# =====================================================================
+# Dataframe helpers
+# =====================================================================
+
+def find_region_table(namespace: dict[str, Any], region_name: str) -> pd.DataFrame | None:
+    forecast_tables = namespace.get("forecast_tables")
+
+    if isinstance(forecast_tables, dict):
+        if region_name in forecast_tables and isinstance(forecast_tables[region_name], pd.DataFrame):
+            return forecast_tables[region_name].copy()
+
+        for key, value in forecast_tables.items():
+            if str(key).strip().lower() == region_name.strip().lower() and isinstance(value, pd.DataFrame):
+                return value.copy()
+
+    combined = get_dataframe(namespace, "combined_forecast_table")
+    if combined is not None:
+        for col in ["Region", "Country"]:
+            if col in combined.columns:
+                out = combined[combined[col].astype(str).str.lower().eq(region_name.lower())].copy()
+                if not out.empty:
+                    return out
+
+    return None
+
 
 def render_region_table(namespace: dict[str, Any], region_name: str) -> None:
     st.markdown(f"### Forecast table: {region_name}")
+
     table = find_region_table(namespace, region_name)
+
     if table is not None and not table.empty:
         show_dataframe(table)
         render_download_button_for_dataframe(
@@ -259,106 +311,284 @@ def render_region_table(namespace: dict[str, Any], region_name: str) -> None:
         st.info(f"No forecast table was found for {region_name}.")
 
 
-def render_numbered_figure(
-    figures: list[Any],
-    figure_number: int,
-    title: str | None = None,
-    show_missing_message: bool = False,
-) -> None:
-    index = figure_number - 1
-
-    if not (0 <= index < len(figures)):
-        if show_missing_message:
-            label = title if title else f"Figure {figure_number}"
-            st.markdown(f"### {label}")
-            st.info(
-                f"Figure {figure_number} was not captured. "
-                f"The pipeline captured {len(figures)} figure(s)."
-            )
-        return
-
-    label = title if title else f"Figure {figure_number}"
-    st.markdown(f"### {label}")
-
-    fig = fix_forecast_marker_and_legend(figures[index], figure_number)
-    render_limited_width_matplotlib_figure(fig)
-    st.caption(f"Showing Figure {figure_number} from the captured workflow output.")
-    
-def render_region_tab(
+def render_optional_dataframe(
     namespace: dict[str, Any],
-    figures: list[Any],
-    region_name: str,
-    figure_numbers: list[int] | None = None,
-    final_figure: int | None = None,
+    dataframe_name: str,
+    title: str,
+    filename: str,
 ) -> None:
-    render_region_table(namespace, region_name)
+    df = get_dataframe(namespace, dataframe_name)
 
-    if region_name.lower() == "peru":
-        render_optional_dataframe(
-            namespace,
-            "peru_polygon_forecast_table",
-            "Peru polygon forecast table",
-            "peru_polygon_forecast_table.csv",
-        )
-
-        render_optional_dataframe(
-            namespace,
-            "peru_polygon_summary",
-            "Peru polygon final-3-month summary",
-            "peru_polygon_summary.csv",
-        )
-
-    matched_figures = find_region_figures(figures, region_name)
-
-    if matched_figures:
-        figures_to_show = matched_figures
-    else:
-        figures_to_show = figure_numbers or []
-
-    if final_figure is not None:
-        figures_to_show = figures_to_show + [final_figure]
-
-    # Keep only figure numbers that actually exist.
-    figures_to_show = [
-        n for n in figures_to_show
-        if 1 <= n <= len(figures)
-    ]
-
-    # Extra Peru logic: include polygon/subregion figures even if the numbering changed.
-    if region_name.lower() == "peru":
-        peru_polygon_figures: list[int] = []
-
-        peru_polygon_figures += find_figures_by_terms(
-            figures,
-            ["peru", "polygon"],
-        )
-
-        peru_polygon_figures += find_figures_by_terms(
-            figures,
-            ["peru", "subregion"],
-        )
-
-        peru_polygon_figures += find_figures_by_terms(
-            figures,
-            ["polygon", "forecast"],
-        )
-
-        peru_polygon_figures += find_figures_by_terms(
-            figures,
-            ["polygon", "comparison"],
-        )
-
-        for n in peru_polygon_figures:
-            if n not in figures_to_show and 1 <= n <= len(figures):
-                figures_to_show.append(n)
-
-    if not figures_to_show:
-        st.info(f"No captured figures were found for {region_name}.")
+    if df is None or df.empty:
         return
 
-    for figure_number in figures_to_show:
+    st.markdown("---")
+    st.markdown(f"### {title}")
+    show_dataframe(df)
+    render_download_button_for_dataframe(
+        df,
+        filename,
+        f"Download {title} CSV",
+    )
+
+
+# =====================================================================
+# Provider comparison outputs for Overview
+# =====================================================================
+
+def first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized = {str(col).strip().lower(): col for col in df.columns}
+
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        if key in normalized:
+            return normalized[key]
+
+    for col in df.columns:
+        lower = str(col).lower()
+        if all(part.lower() in lower for part in candidates[0].split()):
+            return col
+
+    return None
+
+
+def render_provider_comparison_outputs(namespace: dict[str, Any]) -> None:
+    """
+    Render overview-level ECMWF vs NOAA outputs as two clean figures.
+
+    These are generated from provider_comparison_summary instead of relying on
+    captured figure order, which prevents Peru polygon figures from appearing in
+    the Overview.
+    """
+    provider_summary = get_dataframe(namespace, "provider_comparison_summary")
+    provider_difference = get_dataframe(namespace, "provider_difference_summary")
+
+    if provider_summary is None or provider_summary.empty:
         st.markdown("---")
-        render_numbered_figure(figures, figure_number)
+        st.info("No ECMWF vs NOAA provider-comparison summary was found in the pipeline output.")
+        return
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    region_col = first_existing_column(provider_summary, ["Region", "Country"])
+    provider_col = first_existing_column(provider_summary, ["Provider", "Forecast source", "Source"])
+    temp_col = first_existing_column(
+        provider_summary,
+        ["Mean temperature anomaly (°C)", "Mean temp anomaly °C", "Mean temperature anomaly"],
+    )
+    precip_col = first_existing_column(
+        provider_summary,
+        [
+            "Mean precipitation anomaly (mm/month)",
+            "Mean precip anomaly mm/month",
+            "Mean precipitation anomaly",
+        ],
+    )
+
+    if region_col is None or provider_col is None:
+        st.markdown("---")
+        st.markdown("### ECMWF vs NOAA provider comparison")
+        st.info("The provider comparison table does not contain the expected region/provider columns.")
+        show_dataframe(provider_summary)
+        return
+
+    def render_grouped_bar_chart(value_col: str, title: str, ylabel: str) -> None:
+        pivot = provider_summary.pivot_table(
+            index=region_col,
+            columns=provider_col,
+            values=value_col,
+            aggfunc="mean",
+        )
+
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        x = np.arange(len(pivot.index))
+        providers = list(pivot.columns)
+        width = 0.75 / max(len(providers), 1)
+
+        for i, provider in enumerate(providers):
+            offset = (i - (len(providers) - 1) / 2) * width
+            ax.bar(
+                x + offset,
+                pivot[provider].values,
+                width=width,
+                label=str(provider),
+                alpha=0.82,
+            )
+
+        ax.axhline(0, color="gray", linewidth=0.8)
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels(pivot.index, rotation=30, ha="right")
+        ax.grid(True, axis="y", linestyle="--", alpha=0.35)
+        ax.legend()
+        plt.tight_layout()
+
+        st.markdown("---")
+        st.markdown(f"### {title}")
+        render_limited_width_matplotlib_figure(fig)
+        st.caption("ECMWF vs NOAA comparison based on the final common forecast months.")
+        plt.close(fig)
+
+    if temp_col is not None:
+        render_grouped_bar_chart(
+            temp_col,
+            "ECMWF vs NOAA mean temperature anomaly",
+            "°C",
+        )
+
+    if precip_col is not None:
+        render_grouped_bar_chart(
+            precip_col,
+            "ECMWF vs NOAA mean precipitation anomaly",
+            "mm/month",
+        )
+
+    with st.expander("Provider-comparison tables", expanded=False):
+        st.markdown("#### ECMWF vs NOAA provider-comparison summary")
+        show_dataframe(provider_summary)
+        render_download_button_for_dataframe(
+            provider_summary,
+            "provider_comparison_summary.csv",
+            "Download ECMWF vs NOAA comparison CSV",
+        )
+
+        if provider_difference is not None and not provider_difference.empty:
+            st.markdown("#### ECMWF minus NOAA provider-difference summary")
+            show_dataframe(provider_difference)
+            render_download_button_for_dataframe(
+                provider_difference,
+                "provider_difference_summary.csv",
+                "Download ECMWF minus NOAA difference CSV",
+            )
+
+
+# =====================================================================
+# Peru polygon map
+# =====================================================================
+
+def render_peru_polygon_map(namespace: dict[str, Any]) -> None:
+    """
+    Render a simple Peru polygon/subregion map directly in Streamlit.
+
+    This does not require Cartopy. It uses the shapely polygon geometries created
+    by legacy_workflow.py:
+    - peru_subregion_polygons
+    - optional peru_country_geom
+    """
+    polygons = namespace.get("peru_subregion_polygons")
+    peru_boundary = namespace.get("peru_country_geom")
+
+    if not isinstance(polygons, dict) or len(polygons) == 0:
+        st.markdown("---")
+        st.info("No Peru polygon geometries were found in the pipeline output.")
+        return
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.collections import PatchCollection
+    from matplotlib.patches import Polygon as MplPolygon
+
+    def iter_polygons(geom: Any) -> list[Any]:
+        if geom is None:
+            return []
+
+        geom_type = getattr(geom, "geom_type", "")
+
+        if geom_type == "Polygon":
+            return [geom]
+
+        if geom_type == "MultiPolygon":
+            return list(geom.geoms)
+
+        return []
+
+    fig, ax = plt.subplots(figsize=(7.5, 9))
+
+    if peru_boundary is not None:
+        for geom in iter_polygons(peru_boundary):
+            try:
+                x, y = geom.exterior.xy
+                ax.plot(x, y, color="black", linewidth=1.2, alpha=0.8)
+            except Exception:
+                pass
+
+    patches = []
+    colors = plt.cm.tab20(np.linspace(0, 1, max(len(polygons), 1)))
+
+    for idx, (name, geom) in enumerate(polygons.items()):
+        for poly in iter_polygons(geom):
+            try:
+                coords = np.asarray(poly.exterior.coords)
+                patches.append(MplPolygon(coords, closed=True))
+
+                centroid = poly.centroid
+                ax.text(
+                    centroid.x,
+                    centroid.y,
+                    str(name),
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="black",
+                    bbox=dict(
+                        boxstyle="round,pad=0.2",
+                        facecolor="white",
+                        edgecolor="none",
+                        alpha=0.75,
+                    ),
+                )
+            except Exception:
+                continue
+
+    if patches:
+        collection = PatchCollection(
+            patches,
+            facecolor=colors[: len(patches)],
+            edgecolor="black",
+            linewidth=1.0,
+            alpha=0.65,
+        )
+        ax.add_collection(collection)
+
+    all_bounds = []
+    for geom in polygons.values():
+        try:
+            all_bounds.append(geom.bounds)
+        except Exception:
+            pass
+
+    if all_bounds:
+        minx = min(b[0] for b in all_bounds)
+        miny = min(b[1] for b in all_bounds)
+        maxx = max(b[2] for b in all_bounds)
+        maxy = max(b[3] for b in all_bounds)
+
+        pad_x = max((maxx - minx) * 0.12, 0.5)
+        pad_y = max((maxy - miny) * 0.12, 0.5)
+
+        ax.set_xlim(minx - pad_x, maxx + pad_x)
+        ax.set_ylim(miny - pad_y, maxy + pad_y)
+
+    ax.set_title("Peru polygon subregions used for forecast analysis")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.set_aspect("equal", adjustable="box")
+
+    plt.tight_layout()
+
+    st.markdown("---")
+    st.markdown("### Peru polygon subregion map")
+    render_limited_width_matplotlib_figure(fig)
+    st.caption("Polygon subregions used for the Peru polygon-based forecast analysis.")
+    plt.close(fig)
+
+
+# =====================================================================
+# Tab renderers
+# =====================================================================
 
 def render_overview_tab(namespace: dict[str, Any], figures: list[Any]) -> None:
     st.subheader("Overview")
@@ -389,105 +619,104 @@ def render_overview_tab(namespace: dict[str, Any], figures: list[Any]) -> None:
         st.info("No forecast_last3_summary DataFrame was found in the pipeline output.")
 
     st.markdown("---")
-    render_numbered_figure(figures, 1)
+    render_workflow_figure(figures, 1, title="Niño3.4 historical context")
 
-    # Show the last two captured workflow figures in the Overview.
-    # These replace the old hardcoded Figure 17 and Figure 18 slots.
-    if len(figures) >= 2:
-        overview_bottom_figures = [
-            (len(figures) - 1, "Figure 17"),
-            (len(figures), "Figure 18"),
-        ]
+    render_provider_comparison_outputs(namespace)
 
-        for figure_number, display_title in overview_bottom_figures:
-            st.markdown("---")
-            render_numbered_figure(
-                figures,
-                figure_number,
-                title=display_title,
-                show_missing_message=True,
-            )
-    else:
-        st.info("The pipeline did not capture enough figures to show the two overview summary figures.")
 
-def render_optional_dataframe(
+def render_region_tab(
     namespace: dict[str, Any],
-    dataframe_name: str,
-    title: str,
-    filename: str,
+    figures: list[Any],
+    region_name: str,
+    figure_numbers: list[int] | None = None,
+    final_figure: int | None = None,
 ) -> None:
-    df = get_dataframe(namespace, dataframe_name)
+    render_region_table(namespace, region_name)
 
-    if df is None or df.empty:
-        return
+    if region_name.lower() == "peru":
+        render_optional_dataframe(
+            namespace,
+            "peru_polygon_forecast_table",
+            "Peru polygon forecast table",
+            "peru_polygon_forecast_table.csv",
+        )
+        render_optional_dataframe(
+            namespace,
+            "peru_polygon_summary",
+            "Peru polygon final-3-month summary",
+            "peru_polygon_summary.csv",
+        )
 
-    st.markdown("---")
-    st.markdown(f"### {title}")
-    show_dataframe(df)
-    render_download_button_for_dataframe(
-        df,
-        filename,
-        f"Download {title} CSV",
+    matched_figures = find_region_figures(figures, region_name)
+    figures_to_show = matched_figures if matched_figures else (figure_numbers or [])
+
+    if final_figure is not None:
+        figures_to_show = figures_to_show + [final_figure]
+
+    if region_name.lower() == "peru":
+        peru_polygon_figures: list[int] = []
+        peru_polygon_figures += find_figures_by_terms(figures, ["peru", "polygon"])
+        peru_polygon_figures += find_figures_by_terms(figures, ["peru", "subregion"])
+        peru_polygon_figures += find_figures_by_terms(figures, ["polygon", "forecast"])
+        peru_polygon_figures += find_figures_by_terms(figures, ["polygon", "comparison"])
+        figures_to_show = figures_to_show + peru_polygon_figures
+
+    figures_to_show = unique_existing_figure_numbers(figures_to_show, figures)
+
+    if not figures_to_show:
+        st.info(f"No captured figures were found for {region_name}.")
+    else:
+        for number in figures_to_show:
+            st.markdown("---")
+            render_workflow_figure(figures, number)
+
+    if region_name.lower() == "peru":
+        render_peru_polygon_map(namespace)
+
+
+# =====================================================================
+# Streamlit app
+# =====================================================================
+
+st.set_page_config(
+    page_title="El Nino climate dashboard",
+    page_icon="🌦️",
+    layout="wide",
+)
+
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        padding: 0.6rem;
+        border: 1px solid #e6e8eb;
+        border-radius: 0.5rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+@st.cache_resource(show_spinner=False)
+def cached_pipeline_run(workflow_hash: str, force_refresh: bool):
+    return run_pipeline(
+        data_dir=DATA_DIR,
+        force_refresh=force_refresh,
     )
-
-
-def figure_text_contains(fig: Any, required_terms: list[str]) -> bool:
-    texts: list[str] = []
-
-    suptitle = getattr(fig, "_suptitle", None)
-    if suptitle is not None:
-        try:
-            texts.append(str(suptitle.get_text()))
-        except Exception:
-            pass
-
-    for ax in getattr(fig, "axes", []):
-        for getter in [ax.get_title, ax.get_xlabel, ax.get_ylabel]:
-            try:
-                texts.append(str(getter()))
-            except Exception:
-                pass
-
-        try:
-            handles, labels = ax.get_legend_handles_labels()
-            texts.extend([str(label) for label in labels])
-        except Exception:
-            pass
-
-    joined = " ".join(texts).lower()
-    return all(term.lower() in joined for term in required_terms)
-
-
-def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
-    matches: list[int] = []
-
-    for i, fig in enumerate(figures, start=1):
-        try:
-            if figure_text_contains(fig, required_terms):
-                matches.append(i)
-        except Exception:
-            pass
-
-    return matches
-    
-
-
-def find_figures_by_terms(figures: list[Any], required_terms: list[str]) -> list[int]:
-    matches: list[int] = []
-
-    for i, fig in enumerate(figures, start=1):
-        try:
-            if figure_text_contains(fig, required_terms):
-                matches.append(i)
-        except Exception:
-            pass
-
-    return matches   
 
 
 def main() -> None:
     st.title("🌦️ El Nino climate forecast dashboard")
-    st.caption("Overview plus regional forecast tables and selected figures for Peru, Madagascar, Thailand, Kenya, and Switzerland.")
+    st.caption(
+        "Overview plus regional forecast tables and selected figures for Peru, "
+        "Madagascar, Thailand, Kenya, and Switzerland."
+    )
 
     st.sidebar.title("Controls")
     force_refresh = st.sidebar.toggle(
@@ -523,6 +752,7 @@ def main() -> None:
         latest_nino_value = f"{float(latest_val):.2f} deg C ({format_month(latest_time)})"
 
     c1, c2, c3, c4, c5 = st.columns([1.15, 1.0, 1.25, 0.85, 1.10])
+
     with c1:
         compact_metric("Historical data", f"{historical_start} to {format_month(observed_end)}")
     with c2:
@@ -540,6 +770,7 @@ def main() -> None:
             forecast_months = pd.DatetimeIndex(pd.to_datetime(fc_times)).strftime("%Y-%m").tolist()
         except Exception:
             forecast_months = []
+
         st.write(
             {
                 "historical_start": historical_start,
@@ -555,16 +786,33 @@ def main() -> None:
         with st.expander("Pipeline log", expanded=False):
             st.code(result.stdout, language="text")
 
-    tab_overview, tab_peru, tab_madagascar, tab_thailand, tab_kenya, tab_switzerland = st.tabs(["Overview", "Peru", "Madagascar", "Thailand", "Kenya", "Switzerland"])
+    (
+        tab_overview,
+        tab_peru,
+        tab_madagascar,
+        tab_thailand,
+        tab_kenya,
+        tab_switzerland,
+    ) = st.tabs(["Overview", "Peru", "Madagascar", "Thailand", "Kenya", "Switzerland"])
 
     with tab_overview:
         render_overview_tab(ns, figures)
+
     with tab_peru:
-        render_region_tab(ns, figures, "Peru", figure_numbers=[4, 9, 13, 20, 21], final_figure=19)
+        render_region_tab(
+            ns,
+            figures,
+            "Peru",
+            figure_numbers=[4, 9, 13, 20, 21],
+            final_figure=19,
+        )
+
     with tab_madagascar:
         render_region_tab(ns, figures, "Madagascar", figure_numbers=[5, 10, 14])
+
     with tab_thailand:
         render_region_tab(ns, figures, "Thailand", figure_numbers=[3, 8, 12])
+
     with tab_kenya:
         render_region_tab(ns, figures, "Kenya", figure_numbers=[2, 7, 11])
 
